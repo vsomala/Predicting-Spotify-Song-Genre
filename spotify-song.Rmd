@@ -1,0 +1,199 @@
+---
+title: "Determining Song Genres of Spotify's Morning Playlist"
+author: Venkat Somala
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+
+
+
+# Objectives
+
+Build an algorithm which can be used to automatically label a song’s genre based on its properties and artist information.
+
+# Part 1: Develop an algorithm that Spotify can use to determine the genre of a song.
+
+```{r warning=FALSE, message=FALSE}
+
+spotify <- read.csv("https://www.macalester.edu/~ajohns24/data/music_1_exam.csv")
+
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(caret)
+library(rpart)        # for building trees
+library(rpart.plot)   # for plotting trees
+library(class)        # for the instructor's plotting functions
+library(randomForest) # for bagging & forests
+library(infer)        # for resampling
+```
+
+
+
+The first thing I did before running an alogrithm was to clean the data set. I converted the song name from being a column to being a rowname and also deleted the column of artist names. Since each artist appeared only once in the data set, there was no point in leaving it in as apart of the dataset the alogrithm will use. 
+
+Few sample rows of cleaned data. We see that the variables capture characteristics such as tempo and danceability of each song.
+
+```{r}
+
+library(tibble)
+spotify_clean <- spotify %>% 
+  column_to_rownames("song")
+spotify_clean <- spotify_clean[-1]
+head(spotify_clean)
+```
+
+
+### Classification Approach
+
+In choosing this algorithm, I prioritized accuracy and stability over simplicity. Thus I used an algorithm which is known to enjoy low variability (in the bias-variance tradeoff).
+
+I used a random forest approach for this supervised classification problem. Since there are more than two categories that we are trying to predict, we cannot use logistic regression techniques and need an unparametric classiciation tool. 
+
+The pros of using random forest approach is that relative to trees, bagging and forests usually reduce variance and have better classification since it uses multiple trees. Forests are also more computationally efficient. 
+
+```{r warning=FALSE, message=FALSE}
+
+set.seed(253)
+
+forest_model <- train(
+  genre ~ .,
+  data = spotify_clean,
+  method = "rf",
+  tuneGrid = data.frame(mtry = c(1,2,6, 8, 10,14,16,17,18,19)),
+  trControl = trainControl(method = "oob"),
+  metric = "Accuracy",
+  na.action = na.omit
+)
+```
+
+```{r}
+plot(forest_model)
+
+```
+
+```{r}
+forest_model$finalModel
+
+
+```
+
+Studying the confusion matrix, we see that the OOB error rate is pretty high at 54%. Our model classfied all of the ElectroClub songs incorrectly and held a class error of 1 in classfying ElectroClub songs. The model did relatively well in classifying pop music with a class error of 0.23. RBHipHop was still relatively poor with a class error of .73.
+
+
+
+##  2: Determine which predictor is the most useful.
+
+```{r warning=FALSE, message=FALSE}
+variable_importance <- data.frame(randomForest::importance(forest_model$finalModel)) %>% 
+  mutate(predictor = rownames(.))
+
+# Arrange predictors by importance (most to least)
+variable_importance %>% 
+  arrange(desc(MeanDecreaseGini)) %>% 
+  head()
+
+# Arrange predictors by importance (least to most)
+variable_importance %>% 
+  arrange(MeanDecreaseGini) %>% 
+  head()
+```
+
+```{r}
+ggplot(spotify_clean, aes(x = valence, fill = genre)) + 
+  geom_density(alpha = 0.5)
+
+```
+
+
+
+The most important predictor seems to be valence. From our varaible importance analysis, we see that valence has the highest mean decrease gini of 3.258. This may be becuase there seems to be a distinct split in the valence between the genres. Looking at the density plots we see that pop seems to have the lowest valence, RBHipHop has middle valence, and ElectroClub has high valence. 
+
+
+
+
+
+
+
+
+
+##  3: Limitations of the algorithm.
+
+Overall, the random forest does an ok job of distinguishing between songs of different genres. Looking at the confusion matrix we see that the OOB estimate of error rate is 54% which is not very good. The algorithm did the best job of classifying songs in the Pop genre, but did a bad job of classifying ElectroClub and RBHipHop. The algorithm only classified ElectroClub correctly 1 time out of 12 and only classified RBHipHop correctly 4 times out of 15. Looking at the plot of the forest model, we see that the OOB accuracy rate actually drops significantly from around 46% after we use more than 2 predictors and then fluctuates a little after. Some limitations of the random forest technique.
+
+
+
+
+# Part 2
+
+##  4: Classifying genre of songs using data that missing information about genre.
+
+This data is comprised of songs from a morning playlist. It has all of the same variables as the previous dataset, except the genre variable is missing. We are going to build a model to predict the genre of the songs. 
+
+```{r}
+spotify_new <- read.csv("https://www.macalester.edu/~ajohns24/data/music_2_exam.csv")
+```
+
+```{r}
+library(tibble)
+spotify_newcluster <- spotify_new %>% 
+  column_to_rownames("track_name")
+spotify_newcluster <- spotify_newcluster[-1]
+
+
+hier_model <- hclust(dist(scale(spotify_newcluster)), method = "complete")
+```
+
+```{r warning=FALSE, message=FALSE}
+library(tree)
+spotify_cluster <- hclust(dist(spotify_new), method = "complete")
+plot(spotify_cluster)
+
+
+```
+
+
+```{r}
+# Visualization: heatmaps (w/ and w/out dendrogram)
+heatmap(data.matrix(scale(spotify_newcluster)), Colv = NA)
+heatmap(data.matrix(scale(spotify_newcluster)), Colv = NA, Rowv = NA)
+
+```
+
+Studying the cluster dendrogram, we are able to see which songs are closely related to each other. We see that classical music like "Piano Sonata", "Concerto in D Minor", and "Symphony No.2 in C Minor" are all clustered in the same Dendogram. 
+
+```{r}
+plot(hier_model, cex = .3)
+
+
+```
+
+
+Here, we assign each sample case to a cluster. 
+
+```{r}
+# Assign each sample case to a cluster (you can add to dataset using mutate())
+# You specify the number of clusters, k
+as.factor(cutree(hier_model, k = 4))
+
+```
+
+
+
+
+Once again, the first thing we do is clean the data set. I converted the track name column into the rowname and also deleted the artist column from the dataset. 
+
+Looking at the dendogram we built, we see that there seem to be 4 clusters that capture the genre of the songs. The first cluster we can categorize as being classical music. The second is more religious or instrumental. The third could be pop and the fourth is RBHipHop. 
+
+The morning playlist we analysed can be described by 4 main genres: classical, religious/instrumental, pop, and RBHipHop.
+
+
+
+
+
+
+
+
